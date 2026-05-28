@@ -1,13 +1,10 @@
 """
-프로젝트: Curiosity Map (호기심 캔버스 마인드맵) - V3 (Miro/Obsidian Style)
-특징: 
-1. 화면 전환 없음: 처음부터 100% 꽉 찬 무한 캔버스 로드
-2. 텍스트 자동 줄바꿈: 노드가 길쭉해지지 않고 예쁜 직사각형 유지 (widthConstraint)
-3. 스무스한 물리 엔진: 노드 생성 시 겹치지 않고 밀어내며 자연스럽게 배치됨
+프로젝트: Curiosity Map (호기심 캔버스 마인드맵) - 광활한 무한 캔버스 버전
 """
 import streamlit as st
 import google.generativeai as genai
 import json
+import uuid
 from supabase import create_client, Client
 from streamlit_agraph import agraph, Node, Edge, Config
 
@@ -18,27 +15,42 @@ st.set_page_config(page_title="Curiosity Canvas", page_icon="🌌", layout="wide
 
 st.markdown("""
 <style>
-    .stApp { background-color: #fafafa; }
-    /* 상단 헤더, 여백 완전히 날리기 */
-    header { visibility: hidden; }
+    /* 전체 배경을 은은한 도트 감성의 빈 공간으로 */
+    .stApp { background-color: #f8fafc; }
+    
+    /* 화면을 좁고 길쭉하게 만드는 주범(여백, 헤더, 푸터) 완벽 제거 */
+    header { display: none !important; }
+    footer { display: none !important; }
     .main .block-container {
-        padding: 0rem !important;
+        padding: 0 !important;
         max-width: 100% !important;
         margin: 0 !important;
     }
-    /* 하단 입력창을 커맨드 팔레트처럼 플로팅 */
-    .floating-input {
-        position: fixed;
-        bottom: 30px;
-        left: 50%;
-        transform: translateX(-50%);
-        width: 600px;
-        z-index: 99999;
-        background: white;
-        padding: 15px 25px;
-        border-radius: 50px;
-        box-shadow: 0 10px 25px rgba(0,0,0,0.1);
-        border: 1px solid #e2e8f0;
+    
+    /* 1단계: 정중앙 글상자 디자인 */
+    .center-container {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+    }
+    div[data-testid="stTextInput"] {
+        width: 250px !important;
+    }
+    div[data-baseweb="input"] > div {
+        background-color: #ffffff !important;
+        border: 2px solid #cbd5e1 !important;
+        border-radius: 12px !important;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.05) !important;
+    }
+    div[data-baseweb="input"] > div:focus-within {
+        border-color: #8b5cf6 !important;
+        box-shadow: 0 0 0 4px rgba(139, 92, 246, 0.1) !important;
+    }
+    input {
+        text-align: center !important;
+        font-size: 1.2rem !important;
+        padding: 1.2rem !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -50,6 +62,8 @@ if "edges" not in st.session_state:
     st.session_state.edges = []
 if "expanded_nodes" not in st.session_state:
     st.session_state.expanded_nodes = set()
+if "is_started" not in st.session_state:
+    st.session_state.is_started = False
 if "pending_expansion" not in st.session_state:
     st.session_state.pending_expansion = None 
 
@@ -67,11 +81,6 @@ def init_supabase() -> Client | None:
     return None
 
 supabase = init_supabase()
-
-if not GEMINI_API_KEY:
-    st.error("🚨 Secrets에 GEMINI_API_KEY를 설정해주세요.")
-    st.stop()
-
 genai.configure(api_key=GEMINI_API_KEY)
 
 # ==========================================
@@ -91,9 +100,8 @@ def fetch_curiosity_data(keyword: str):
     model = genai.GenerativeModel('gemini-3.1-flash-lite', generation_config={"response_mime_type": "application/json"})
     
     prompt = f"""
-    너는 인간의 호기심을 폭발시키는 지식 툴이야.
     키워드: "{keyword_clean}"
-    이 키워드에서 파생되는 심도 있는 질문 3가지를 만들어. 너무 길지 않게 핵심만 작성해.
+    이 키워드에서 파생되는 심도 있는 질문 3가지를 만들어.
     반드시 아래의 JSON 구조로만 답변해:
     {{
         "branches": [
@@ -112,7 +120,7 @@ def fetch_curiosity_data(keyword: str):
             except Exception:
                 pass 
         return data
-    except Exception as e:
+    except Exception:
         return None
 
 def expand_graph(keyword: str, parent_id: str):
@@ -122,97 +130,115 @@ def expand_graph(keyword: str, parent_id: str):
             q = branch["question"]
             node_id = f"{parent_id}_||_{idx}_||_{q}" 
             
+            # 사각형 상자 디자인 (widthConstraint로 텍스트 자동 줄바꿈)
             st.session_state.nodes.append(Node(
                 id=node_id,
                 label=q,
                 shape="box",
                 color={"border": "#cbd5e1", "background": "#ffffff", "highlight": {"border": "#8b5cf6", "background": "#f8fafc"}},
                 font={"color": "#1e293b", "size": 15},
-                # 💡 핵심: 상자가 길쭉해지지 않도록 최대 너비 제한 (자동 줄바꿈 됨)
-                widthConstraint={"maximum": 220}, 
+                widthConstraint={"maximum": 250}, 
                 margin={"top": 12, "bottom": 12, "left": 15, "right": 15}
             ))
             
+            # 스무스한 곡선 연결선
             st.session_state.edges.append(Edge(
                 source=parent_id,
                 target=node_id,
                 color="#cbd5e1",
                 width=2,
-                smooth={"type": "cubicBezier", "forceDirection": "horizontal", "roundness": 0.5}
+                smooth={"type": "cubicBezier", "forceDirection": "horizontal", "roundness": 0.6}
             ))
             
         st.session_state.expanded_nodes.add(parent_id)
 
 # ==========================================
-# 4. 캔버스 레이아웃 및 렌더링
+# 4. 동적 UI 렌더링
 # ==========================================
 
-# 💡 마이로/옵시디언 감성의 정밀한 물리엔진 세팅
-config = Config(
-    width="100%",
-    height="100vh", # 화면 꽉 채우기
-    directed=True, 
-    physics={
-        "hierarchicalRepulsion": {
-            "nodeDistance": 180, # 노드 간격 (겹침 방지)
-            "springLength": 250, # 화살표 길이
-            "springConstant": 0.05
-        },
-        "solver": "hierarchicalRepulsion"
-    },
-    layout={
-        "hierarchical": {
-            "enabled": True,
-            "direction": "LR",      # 좌에서 우로
-            "sortMethod": "directed",
-            "levelSeparation": 300, # 가로 단계별 간격
-        }
-    },
-    interaction={"hover": True, "dragNodes": True, "zoomView": True}
-)
-
-# 캔버스 렌더링 (화면에는 항상 이 캔버스가 떠 있습니다)
-clicked_node_id = agraph(nodes=st.session_state.nodes, edges=st.session_state.edges, config=config)
-
-# 상단 혹은 하단에 고정된 검색창 
-st.markdown("<div class='floating-input'>", unsafe_allow_html=True)
-with st.form("seed_form", clear_on_submit=True, border=False):
-    col1, col2 = st.columns([5, 1])
-    with col1:
-        seed_word = st.text_input("🌱 시작 키워드 입력", placeholder="예: 양자역학, 자본주의...", label_visibility="collapsed")
-    with col2:
-        submit_btn = st.form_submit_button("확장")
-st.markdown("</div>", unsafe_allow_html=True)
-
-# ==========================================
-# 5. 인터랙션 처리 (키워드 입력 OR 노드 클릭)
-# ==========================================
-if submit_btn and seed_word:
-    # 캔버스 비우고 정중앙에 루트 노드 생성
-    st.session_state.nodes = [Node(
-        id=seed_word,
-        label=seed_word,
-        shape="box",
-        color={"border": "#8b5cf6", "background": "#f5f3ff"},
-        font={"color": "#1e293b", "size": 18, "bold": True},
-        widthConstraint={"maximum": 200},
-        margin={"top": 15, "bottom": 15, "left": 20, "right": 20}
-    )]
-    st.session_state.edges = []
-    st.session_state.expanded_nodes = set()
-    st.session_state.pending_expansion = seed_word
-    st.rerun()
-
-# 백그라운드 확장 처리 (루트 노드 생성 직후)
-if st.session_state.pending_expansion:
-    node_id = st.session_state.pending_expansion
-    keyword = node_id.split("_||_")[-1] if "_||_" in node_id else node_id
+if not st.session_state.is_started:
+    # ---------------------------------------------------------
+    # [1단계] 광활한 캔버스 정중앙의 글상자
+    # ---------------------------------------------------------
+    st.markdown("<div class='center-container'>", unsafe_allow_html=True)
     
-    expand_graph(keyword, node_id)
-    st.session_state.pending_expansion = None
-    st.rerun()
+    # 💡 난수(uuid)를 key에 섞어 브라우저의 과거 검색어 자동완성을 강제로 무력화시킵니다.
+    seed_word = st.text_input(
+        "시드", 
+        placeholder="단어를 입력하세요", 
+        label_visibility="collapsed",
+        key=f"seed_{uuid.uuid4()}" 
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+    
+    if seed_word:
+        with st.spinner("생각을 그리는 중..."):
+            st.session_state.nodes.append(Node(
+                id=seed_word,
+                label=seed_word,
+                shape="box",
+                color={"border": "#8b5cf6", "background": "#f5f3ff"},
+                font={"color": "#1e293b", "size": 18, "bold": True},
+                widthConstraint={"maximum": 200},
+                margin={"top": 15, "bottom": 15, "left": 20, "right": 20}
+            ))
+            st.session_state.is_started = True
+            st.session_state.pending_expansion = seed_word
+            st.rerun()
 
-# 기존에 띄워진 노드를 클릭했을 때 확장
-if clicked_node_id and clicked_node_id not in st.session_state.expanded_nodes:
-    st.session_state.pending_expansion = clicked_node_id
-    st.rerun()
+else:
+    # ---------------------------------------------------------
+    # [2단계] 스르륵 그려지는 무한 마인드맵 캔버스
+    # ---------------------------------------------------------
+    config = Config(
+        width="100%",
+        height="100vh", # 💡 찌그러짐 방지: 화면 전체 높이 사용
+        directed=True, 
+        physics=True,   # 💡 노드가 스르륵 날아와서 자리잡는 물리 애니메이션 효과
+        hierarchical=True,
+        layout={
+            "hierarchical": {
+                "enabled": True,
+                "direction": "LR",        # 완벽한 왼쪽 -> 오른쪽 방향
+                "sortMethod": "directed",
+                "levelSeparation": 300,   # 화살표 길이
+                "nodeSpacing": 100        # 상자 위아래 간격
+            }
+        },
+        interaction={"hover": True, "dragNodes": True}
+    )
+    
+    # 캔버스 렌더링 (클릭한 상자 ID 반환)
+    clicked_node_id = agraph(nodes=st.session_state.nodes, edges=st.session_state.edges, config=config)
+    
+    # 백그라운드 확장 처리 (새로운 가지 치기)
+    if st.session_state.pending_expansion:
+        node_id = st.session_state.pending_expansion
+        keyword = node_id.split("_||_")[-1] if "_||_" in node_id else node_id
+        
+        with st.spinner("생각을 확장하는 중..."):
+            expand_graph(keyword, node_id)
+            
+        st.session_state.pending_expansion = None
+        st.rerun() # 새로운 상자들이 우측으로 '스르륵' 등장함
+        
+    # 이미 띄워진 상자를 유저가 클릭했을 때
+    elif clicked_node_id and clicked_node_id not in st.session_state.expanded_nodes:
+        st.session_state.pending_expansion = clicked_node_id
+        st.rerun()
+
+    # 초기화 버튼 (좌측 하단 구석에 조그맣게)
+    st.markdown("""
+        <style>
+        .reset-btn { position: fixed; bottom: 20px; left: 20px; z-index: 999; opacity: 0.5; transition: 0.3s; }
+        .reset-btn:hover { opacity: 1; }
+        </style>
+    """, unsafe_allow_html=True)
+    st.markdown("<div class='reset-btn'>", unsafe_allow_html=True)
+    if st.button("🔄 리셋"):
+        st.session_state.nodes = []
+        st.session_state.edges = []
+        st.session_state.expanded_nodes = set()
+        st.session_state.is_started = False
+        st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
