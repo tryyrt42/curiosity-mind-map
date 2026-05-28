@@ -66,8 +66,7 @@ def fetch_curiosity_data(keyword: str):
             pass # 테이블이 없거나 에러가 나면 API 호출로 넘어감
 
     # 2. Gemini API 호출 (Cache Miss)
-    model = genai.GenerativeModel('gemini-1.5-flash', generation_config={"response_mime_type": "application/json"})
-    
+    model = genai.GenerativeModel('gemini-3.1-flash-lite', generation_config={"response_mime_type": "application/json"})
     prompt = f"""
     너는 인간의 호기심을 폭발시키는 지식 탐험 가이드야.
     사용자가 제시한 키워드: "{keyword_clean}"
